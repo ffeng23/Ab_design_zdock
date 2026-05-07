@@ -1,0 +1,40 @@
+#snake file to run zdock workflwo, the second step
+# to reorder the chains in the zdock created complex, because this
+# is required
+# Feng Feng 5/7/2024
+
+#command to run: snakemake -c 1 -p -s Snakefile_run -n --use-conda
+
+#========================================
+#  CONFIGURATION SECTION
+
+
+ENV_PATH="/home/feng/Feng/hg/zdock"
+
+#-----------------------------------------
+
+#initial glob to
+complex_num,= glob_wildcards("complex.{num}.pdb")
+
+print(f"complex numbers are : {complex_num}")
+
+rule all:
+  input:
+    expand("complex_reordered.{num}.pdb", num=complex_num)
+
+
+
+# step 1 mark surface
+rule zdock_reorder:
+  input:
+    "complex.{num}.pdb"
+  output:
+    "complex_reordered.{num}.pdb"
+  conda:
+    ENV_PATH+"/environment.yml"
+  shell:
+    """
+    {{ pdb_selchain -L {input} ; pdb_selchain -H {input} | grep -vE 'REMARK|HEADER' ; pdb_selchain -P {input} | grep -vE 'REMARK|HEADER' ; }} | pdb_tidy > {output}
+
+    """
+
