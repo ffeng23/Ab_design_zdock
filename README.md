@@ -21,5 +21,5 @@ done on 4/29/2026
 + extract or download and install required libraries
 + create a subfolder and copy the receptor and ligand pdb structures into subfolder.
 + clean the pdb structures (see the github post for details, mainly to remove the atoms using pymol)
-+ copy the snakemake file to the subfolder. (need to configure the snake file for correctly running)
++ copy the snakemake file (two files to run) to the subfolder. (need to configure the snake file for correctly running)
 + run snake for the pipeline.
