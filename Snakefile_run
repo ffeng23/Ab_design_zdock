@@ -1,0 +1,212 @@
+#snake file to run zdock workflwo
+# Feng Feng 4/29/2024
+
+#command to run: snakemake -c 1 -p -s Snakefile_run -n --use-conda
+
+#========================================
+#  CONFIGURATION SECTION
+
+## define variables and might move this section to config file
+
+RECEPTOR="model-0.relaxed"
+LIGAND="Vista_8tbq_clean"
+BLOCK_LIST="vist_block.txt"
+
+
+#Feng's Notes: for both receptor and ligand
+#+ Remove Water & Solvent: Water molecules and solvents must be removed
+#  from the PDB file as they are generally not needed for rigid-body docking.
+#
+#+ Remove Non-interacting Ions/Molecules: Any co-crystallized ligands or heteroatoms
+#  not involved in the interface should be removed.
+#
+# use pymol: cmd line , remove solvent or remove organic
+
+EXECUTABLE_PATH="/home/feng/Feng/hg/zdock/zdock3.0.2_linux_x64"
+HBPLUS_PATH="/home/feng/Feng/hg/zdock/hbplus"
+ZRANK_PATH="/home/feng/Feng/hg/zdock/zrank2_linux"
+
+PRUNE_PATH="/home/feng/Feng/hg/zdock/libzdock/bin"
+
+NUM_COMPLEX=5 #this is the one for zdock to model
+
+NUM_PDB=2  #this is final output pdb
+
+#-----------------------------------------
+
+
+rule all:
+  input:
+    RECEPTOR+".marked_h.pdb",LIGAND+".bl_h.pdb", #"zdock.out_out.zr.out",
+    #"zdock.out_out.zr.out.combine",
+    "zdock.out_out.zr.out.prune", "complex.1.pdb",
+    #"zdock", "mark_sur", #"block.pl", #create.pl,
+    "create_lig",
+    "uniCHARMM"
+
+
+# should separate this one into individual commands to be efficient
+rule copy_executables1:
+  output:
+    zdock="zdock", mark_sur="mark_sur", block="block.pl",
+    create_pl="create.pl", create_lig="create_lig"
+  shell:
+    """
+    cp {EXECUTABLE_PATH}/{output.zdock} ./
+    cp {EXECUTABLE_PATH}/{output.mark_sur} ./
+    cp {EXECUTABLE_PATH}/{output.block} ./
+    cp {EXECUTABLE_PATH}/{output.create_pl} ./
+    cp {EXECUTABLE_PATH}/{output.create_lig} ./
+    """
+rule copy_executables2:
+  output:
+    uniCHARMM="uniCHARMM"
+  shell:
+    """
+    cp {EXECUTABLE_PATH}/{output.uniCHARMM} ./
+    """
+
+# step 1 mark surface
+rule zdock_mark:
+  input: #assume cleaned so far
+    receptor=RECEPTOR+".pdb",
+    ligand=LIGAND+".pdb",
+    exec="mark_sur",
+    exec2="uniCHARMM"
+  output:
+    receptor=RECEPTOR+".marked.pdb",
+    ligand=LIGAND+".marked.pdb"
+  shell:
+    """
+    LD_LIBRARY_PATH={EXECUTABLE_PATH} ./{input.exec} {input.receptor} {output.receptor}
+    LD_LIBRARY_PATH={EXECUTABLE_PATH} ./{input.exec} {input.ligand} {output.ligand}
+    """
+# step 2 block
+rule zdock_block:
+  input:
+    ligand=LIGAND+".marked.pdb",
+    exec="block.pl",
+    block_list=BLOCK_LIST
+  output:
+    ligand=LIGAND+".bl.pdb"
+  shell:
+    """
+    ./{input.exec} {input.ligand} {input.block_list} > {output.ligand}
+
+    """
+
+# step 3 initial stage predict with zdock
+
+rule zdock:
+  input:
+    receptor=RECEPTOR+".marked.pdb",
+    ligand=LIGAND+".bl.pdb",
+    exec="zdock"
+  output:
+    "zdock.out"
+  shell:
+    """
+    set +e
+    ./{input.exec} -R {input.receptor} -L {input.ligand} -o {output} -N {NUM_COMPLEX}
+    exitcode=$?
+
+    echo "exitcode is $exitcode"
+    if [ $exitcode -eq 0 ] || [ $exitcode -eq 67 ]; then
+            exit 0
+    else
+            exit $exitcode
+    fi
+
+    """
+
+# step 4, add hydrogen bond to the
+
+rule zrank_hbplus:
+  input:
+    receptor=RECEPTOR+".marked.pdb",
+    ligand=LIGAND+".bl.pdb",
+    exec=HBPLUS_PATH+"/hbplus"
+  output:
+    receptor=RECEPTOR+".marked.h",
+    ligand=LIGAND+".bl.h"
+  shell:
+    """
+    {input.exec} {input.receptor} -o
+    {input.exec} {input.ligand} -o
+
+    """
+
+rule zrank_hbplus_rename:
+  input:
+    receptor=RECEPTOR+".marked.h",
+    ligand=LIGAND+".bl.h",
+    zdock_out="zdock.out"
+  output:
+    receptor=RECEPTOR+".marked_h.pdb",
+    ligand=LIGAND+".bl_h.pdb",
+    zr_out="zdock.out_out.zr.out",
+    zdock_out="zdock.out_out"
+  shell:
+    """
+    #change the file name back to pdb, so to make
+    mv {input.receptor} {output.receptor}
+    mv {input.ligand} {output.ligand}
+
+    sed 's/.pdb/_h.pdb/g' {input.zdock_out} > {output.zdock_out}
+
+    {ZRANK_PATH}/zrank {output.zdock_out} 1, {NUM_COMPLEX}
+
+    """
+
+rule zrank_combine_score:
+  input:
+    zdock_out="zdock.out_out",
+    zr_out="zdock.out_out.zr.out"
+  output:
+    zdock_out="zdock.out_out.zr.out.combine"
+  shell:
+    """
+
+    tail -n +6 {input.zdock_out} > temp.out
+
+    paste <(rev temp.out | cut -f 2- | rev) <(cut -f 2 {input.zr_out}) > temp.out2
+
+
+    #head -n 5 zdock.out > temp.out
+
+    #cat zdock.out.zr.out.combined >> temp.out
+
+    #mv temp.out zdock.out.zr.out.combined
+    #add the header back to the new zr.out combined file
+    {{ head -n 5 {input.zdock_out} ; cat temp.out2 ; }} > {output.zdock_out}
+
+    """
+
+rule zdock_prune:
+  input:
+    zdock_out="zdock.out_out.zr.out.combine"
+  output:
+    zdock_out="zdock.out_out.zr.out.prune"
+  shell:
+    """
+
+    #prune
+    {PRUNE_PATH}/pruning {input.zdock_out} > temp.out
+
+    #and sort
+    ### sort
+    #FILE1=zdock.out.zr.out.pruned
+    {{ head -n 5 temp.out ; tail -n +6 temp.out | sort -t$'\t' -k7 -n -r ; }} > {output.zdock_out}
+
+    """
+
+rule create_pdb:
+  input:
+    zdock_out="zdock.out_out.zr.out.prune",
+    exec="create.pl"
+  output:
+    pdb_out="complex.1.pdb"
+  shell:
+    """
+    ./{input.exec} {input.zdock_out} {NUM_PDB}
+    """
